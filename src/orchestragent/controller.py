@@ -212,7 +212,9 @@ class Controller:
                 source = ""
             context_map: dict[str, object] = {}
             if task.stage == "plan" and self.workspace.seed is not None:
-                context_map = cast(dict[str, object], plan_context(self.workspace.seed, task.prompt))
+                context_map = cast(
+                    dict[str, object], plan_context(self.workspace.seed, task.prompt)
+                )
             context = StepContext(
                 task_id=task.id,
                 prompt=task.prompt,
