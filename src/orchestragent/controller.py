@@ -8,6 +8,7 @@ from collections.abc import Callable
 from dataclasses import replace
 
 from orchestragent.adapters import MockAdapter, StepContext, StepResult
+from orchestragent.contracts import STAGE_SCHEMAS
 from orchestragent.models import (
     RESUMABLE,
     SCENARIOS,
@@ -217,6 +218,7 @@ class Controller:
                 revision=revision,
                 artifact=source,
                 approved=task.approved,
+                schema=STAGE_SCHEMAS[task.stage],
             )
             provider = task.steps[STAGES.index(task.stage)].provider
             # The route is authoritative: the controller knows which adapter it called,
@@ -294,8 +296,9 @@ class Controller:
             step = task.steps[STAGES.index(task.stage)]
             task.revision = revision
             task.artifacts.extend(artifacts)
-            # The Mock contract cannot authorize any billed usage.
-            if task.mode == "mock" and result.cost_usd != 0:
+            # Only the deterministic Mock adapter may claim zero cost; a real endpoint
+            # reporting a number it cannot substantiate fails closed.
+            if result.provider == "mock" and result.cost_usd != 0:
                 result = StepResult(outcome="failed", summary="Unexpected cost; execution blocked")
             step.provider = result.provider
             step.model = result.model
