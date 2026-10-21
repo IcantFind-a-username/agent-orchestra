@@ -6,7 +6,7 @@ on:
   pull_request:
 
 jobs:
-  check:
+  core:
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -22,3 +22,13 @@ jobs:
       - run: uv run pytest -q
       - run: uv run ruff check .
       - run: uv run mypy
+
+  ios:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the iPhone client
+        run: >
+          xcodebuild -project ios/Orchestragent.xcodeproj -scheme Orchestragent
+          -sdk iphonesimulator -configuration Debug -derivedDataPath .build/ios
+          CODE_SIGNING_ALLOWED=NO build
