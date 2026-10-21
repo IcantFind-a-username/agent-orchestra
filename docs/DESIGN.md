@@ -124,33 +124,42 @@
 
 ```python
 @dataclass(frozen=True)
-class StepRequest:
-    stage: str
+class StepContext:
+    task_id: str
     prompt: str
-    schema: dict[str, object]      # JSON Schema，适配器必须校验
-    context: dict[str, object]     # 含 revision、plan 等
+    stage: str
+    scenario: str                  # Mock 专用；真实适配器可以忽略
     attempt: int
+    session_id: str
+    revision: str
+    artifact: str
+    approved: bool = False
 
 @dataclass(frozen=True)
 class StepResult:
-    outcome: str                              # ok / failed / rate_limited / ...
-    data: dict[str, object] = field(default_factory=dict)
+    outcome: str = "ok"              # ok / failed / rate_limited / ...
     summary: str = ""
-    usage: dict[str, object] = field(default_factory=dict)
-    cost_usd: float | None = None             # None = 未知，不是 0
-    provider: str = ""
+    artifact: str = ""
+    session_id: str = ""
+    retry_after: float = 0.0
+    cost_usd: float | None = 0.0     # None = 未知，不是 0
+    provider: str = "mock"
     model: str = ""
+    usage: dict[str, object] = field(default_factory=dict)
 
 class Adapter(Protocol):
     id: str
-    def capabilities(self) -> Capabilities: ...
-    def run(self, request: StepRequest) -> StepResult: ...
+    def run(self, context: StepContext) -> StepResult: ...
 ```
 
 设计要点：**文件落盘不是适配器的职责**。适配器返回文件内容，内核负责校验路径、
 写工作树、提交并固定 SHA。这样任何新厂商的接入都不会碰到文件系统，也不会绕过校验。
 
-内核不得出现任何具体厂商名。厂商名只存在于装配层与适配器实现中，用测试固化这条规则。
+内核不得出现任何具体厂商名。厂商名只存在于装配层与适配器实现中，本仓库不附带任何厂商实现。
+
+**已知限制**：当前 `artifact` 是单个字符串，`scenario` 是 Mock 概念，两者都还不够通用。
+下一步是把结果改成按 JSON Schema 校验的 `data: dict`，文件集合由内核统一处理；
+在那之前，接入真实厂商需要适配器先把输出压成这个形状。
 
 ### 6.1 两种后端形态
 

@@ -33,14 +33,14 @@
 | 成本诚实 | 未知成本记为 `null`，不伪装成 0 | ✅ |
 | 幂等提交 | 同一 `request_id` 重复提交不会创建新任务 | ✅ |
 | Mock 模式 | 9 种场景（审批/限流/额度/超时/失败…），零成本、零网络 | ✅ |
-| 沙箱测试 | 集成后在被限制的环境里跑 unittest | ✅ macOS |
-| 可插拔适配器 | 本机 CLI 或 HTTP 端点，接什么由你配置 | 🚧 进行中 |
+| 隔离执行测试 | 固定夹具在 `-I -S` 解释器里执行，不导入工作区、不读站点包 | ✅ |
+| 可插拔适配器 | 适配器注册表；本仓库只带 Mock 实现 | 🚧 真实适配器待接入 |
 | 代码库搜索 | ripgrep + 符号索引，按 token 预算裁剪结果 | 🚧 计划中 |
 | Linux 沙箱 | `bwrap` / `landlock` 后端 | 🚧 计划中 |
 | 库结构迁移 | SQLite `user_version` 前向迁移 | 🚧 计划中 |
 
-> **当前阶段**：文档与骨架先行，`src/` 在迁移波次 W1 落地。标 🚧 的能力尚未可用，
-> 请不要按已完成的状态依赖它们。完整设计见 [docs/DESIGN.md](docs/DESIGN.md)。
+> **当前阶段**：内核已可运行，但只带 Mock 适配器——端到端流程能跑通，不会调用任何厂商。
+> 标 🚧 的能力尚未可用。完整设计见 [docs/DESIGN.md](docs/DESIGN.md)。
 
 ## 架构
 
@@ -112,6 +112,14 @@ curl -s -X POST http://127.0.0.1:8765/tasks \
 curl -s http://127.0.0.1:8765/tasks                      # 全部任务
 curl -s http://127.0.0.1:8765/tasks/<task_id>            # 单个任务，含阶段与产物
 curl -s 'http://127.0.0.1:8765/tasks/<task_id>/events?after=0'
+```
+
+### 跑测试
+
+```sh
+uv run pytest -q
+uv run ruff check .
+uv run mypy
 ```
 
 事件是追加写、带递增序号，可以用 `after` 做增量拉取：
