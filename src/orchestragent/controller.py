@@ -35,6 +35,7 @@ class Controller:
         registry: ProviderRegistry | None = None,
         clock: Callable[[], float] = time.time,
         lease_seconds: float = 30,
+        allow_bundled_tests: bool = False,
         routes: dict[str, str] | None = None,
     ):
         self.store = store
@@ -42,6 +43,7 @@ class Controller:
         self.registry = registry if registry is not None else ProviderRegistry([MockAdapter()])
         self.clock = clock
         self.lease_seconds = lease_seconds
+        self.allow_bundled_tests = allow_bundled_tests
         # Which adapter handles each stage. Implement and review must not share one
         # when more than one provider is registered: that is the whole point of the split.
         self.routes = {stage: "mock" for stage in STAGES}
@@ -193,11 +195,15 @@ class Controller:
         revision = task.revision
         artifacts: list[Artifact] = []
         try:
-            source = (
-                self.workspace.review_source(task.id, revision)
-                if task.stage in {"review", "test", "summarize"}
-                else ""
-            )
+            bundled = any(item.name == "bundle.json" for item in task.artifacts)
+            if task.stage in {"review", "test", "summarize"}:
+                source = (
+                    self.workspace.bundle_at(task.id, revision)
+                    if bundled
+                    else self.workspace.review_source(task.id, revision)
+                )
+            else:
+                source = ""
             context = StepContext(
                 task_id=task.id,
                 prompt=task.prompt,
@@ -221,15 +227,42 @@ class Controller:
                 self.expire_leases()
                 return True
             if result.outcome == "ok" and task.stage == "implement":
-                revision, diff = self.workspace.implement(task.id, result.artifact)
-                artifacts = [
-                    Artifact("calculator.py (Mock)", result.artifact),
-                    Artifact("implementation.diff", diff),
-                ]
+                files = result.data.get("files")
+                if isinstance(files, list) and files:
+                    accepted = self.workspace.validate_files(files)
+                    revision, diff = self.workspace.implement_bundle(task.id, accepted)
+                    artifacts = [
+                        *(Artifact(item["path"], item["content"]) for item in accepted),
+                        Artifact("implementation.diff", diff),
+                        Artifact("bundle.json", dumps(accepted)),
+                    ]
+                else:
+                    revision, diff = self.workspace.implement(task.id, result.artifact)
+                    artifacts = [
+                        Artifact("calculator.py (Mock)", result.artifact),
+                        Artifact("implementation.diff", diff),
+                    ]
             elif result.outcome == "ok" and task.stage == "test":
-                passed, report = self.workspace.integrate_and_test(task.id, revision)
-                result = replace(result, outcome="ok" if passed else "failed", summary=report)
-                artifacts = [Artifact("integration-tests.txt", report)]
+                if bundled:
+                    if not self.allow_bundled_tests:
+                        # Running model-authored tests needs an OS sandbox this repo lacks.
+                        result = replace(
+                            result,
+                            outcome="policy_blocked",
+                            summary="No sandbox backend: refusing to execute model-authored tests",
+                        )
+                    else:
+                        passed, report = self.workspace.integrate_bundle_and_test(
+                            task.id, revision
+                        )
+                        result = replace(
+                            result, outcome="ok" if passed else "failed", summary=report
+                        )
+                        artifacts = [Artifact("integration-tests.txt", report)]
+                else:
+                    passed, report = self.workspace.integrate_and_test(task.id, revision)
+                    result = replace(result, outcome="ok" if passed else "failed", summary=report)
+                    artifacts = [Artifact("integration-tests.txt", report)]
         except Exception:
             # Never persist arbitrary exception messages: they may carry secrets.
             result = StepResult(outcome="failed", summary="Step failed; no provider was invoked")

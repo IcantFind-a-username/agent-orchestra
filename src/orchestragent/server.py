@@ -234,6 +234,11 @@ def main() -> None:
     parser.add_argument("--review-endpoint", help="Base URL of the reviewing endpoint")
     parser.add_argument("--review-model", default="")
     parser.add_argument("--review-key-env", default="", help="Env var holding the API key")
+    parser.add_argument(
+        "--allow-unsandboxed-tests",
+        action="store_true",
+        help="Run model-authored tests without an OS sandbox (unsafe; off by default)",
+    )
     args = parser.parse_args()
     args.data_dir.mkdir(parents=True, exist_ok=True)
     with (args.data_dir / "controller.lock").open("w") as lock:
@@ -248,6 +253,7 @@ def main() -> None:
             registry=registry,
             routes=routes,
             lease_seconds=30,
+            allow_bundled_tests=args.allow_unsandboxed_tests,
         )
         # Bind before recovering: a second server must not invalidate active work.
         server = Server(controller, args.port)

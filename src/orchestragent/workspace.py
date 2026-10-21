@@ -4,10 +4,11 @@ A worktree is not a security sandbox on its own; see SECURITY.md.
 """
 
 import ast
+import json
 import os
 import subprocess
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 GOOD_SOURCE = "def add(a: int, b: int) -> int:\n    return a + b\n"
 BAD_SOURCE = "def add(a: int, b: int) -> int:\n    return a - b\n"
@@ -128,3 +129,83 @@ class Workspace:
         )
         passed = result.returncode == 0
         return passed, f"Mock fixed-fixture integration tests: {'PASS 2/2' if passed else 'FAIL'}"
+
+    # --- generic bundles, for adapters that return real files ---
+
+    ALLOWED_SUFFIXES = frozenset({".py", ".md", ".txt", ".json", ".toml", ".cfg", ".ini"})
+    MAX_FILES = 20
+    MAX_BYTES = 180_000
+
+    def validate_files(self, files: object) -> list[dict[str, str]]:
+        """Reject a bundle that could escape the worktree or smuggle in hooks."""
+        if not isinstance(files, list) or not files:
+            raise ValueError("A bundle must contain at least one file")
+        if len(files) > self.MAX_FILES:
+            raise ValueError("Bundle exceeds the file count limit")
+        accepted: dict[str, str] = {}
+        total = 0
+        for item in files:
+            if not isinstance(item, dict) or set(item) != {"path", "content"}:
+                raise ValueError("Each file requires exactly path and content")
+            path, content = item["path"], item["content"]
+            if not isinstance(path, str) or not isinstance(content, str):
+                raise ValueError("File path and content must be strings")
+            candidate = PurePosixPath(path)
+            if candidate.is_absolute() or not candidate.parts:
+                raise ValueError("File paths must be relative")
+            if any(part == ".." or part.startswith(".") for part in candidate.parts):
+                raise ValueError("File paths must not escape or hide")
+            if candidate.suffix not in self.ALLOWED_SUFFIXES:
+                raise ValueError(f"Disallowed file extension: {candidate.suffix}")
+            if path in accepted:
+                raise ValueError("Duplicate file path")
+            total += len(content.encode("utf-8"))
+            accepted[path] = content
+        if total > self.MAX_BYTES:
+            raise ValueError("Bundle exceeds the size limit")
+        return [{"path": path, "content": accepted[path]} for path in sorted(accepted)]
+
+    def implement_bundle(self, task_id: str, files: object) -> tuple[str, str]:
+        accepted = self.validate_files(files)
+        repo, implementation = self.prepare(task_id)
+        for item in accepted:
+            target = implementation / item["path"]
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(item["content"])
+        self.git(implementation, "add", "-A")
+        if self.git(implementation, "diff", "--cached", "--name-only"):
+            self.git(implementation, "commit", "-m", "Implement stage output")
+        revision = self.git(implementation, "rev-parse", "HEAD")
+        return revision, self.git(repo, "diff", "main", revision)
+
+    def bundle_at(self, task_id: str, revision: str) -> str:
+        """The exact files the implementation changed, read at a fixed revision."""
+        repo = self.repo(task_id)
+        if len(revision) != 40 or any(c not in "0123456789abcdef" for c in revision):
+            raise ValueError("Review requires a fixed Git revision")
+        names = sorted(self.git(repo, "diff", "--name-only", "main", revision).splitlines())
+        files = [
+            {"path": name, "content": self.git(repo, "show", f"{revision}:{name}", strip=False)}
+            for name in names
+            if name
+        ]
+        return json.dumps(files, ensure_ascii=False, sort_keys=True)
+
+    def integrate_bundle_and_test(self, task_id: str, revision: str) -> tuple[bool, str]:
+        """Merge and run the project's own tests. Only reachable with explicit opt-in."""
+        repo = self.repo(task_id)
+        self.git(repo, "merge", "--ff-only", revision)
+        if self.git(repo, "rev-parse", "HEAD") != revision:
+            raise ValueError("Integrated revision differs from reviewed revision")
+        result = subprocess.run(
+            [sys.executable, "-I", "-S", "-m", "unittest", "discover", "-q"],
+            cwd=repo,
+            env={"PATH": os.defpath, "HOME": str(repo)},
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+        passed = result.returncode == 0
+        output = (result.stderr or result.stdout).strip()
+        return passed, f"Bundled tests: {'PASS' if passed else 'FAIL'}\n{output[-2000:]}"
