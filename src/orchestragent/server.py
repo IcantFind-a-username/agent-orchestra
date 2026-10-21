@@ -3,13 +3,18 @@
 import argparse
 import fcntl
 import json
+import os
 import threading
 from dataclasses import asdict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
+from orchestragent.adapters import MockAdapter
 from orchestragent.controller import Controller
+from orchestragent.http_adapter import HttpAdapter, HttpEndpoint
+from orchestragent.models import STAGES
+from orchestragent.registry import ProviderRegistry
 from orchestragent.serialization import dumps
 from orchestragent.store import Conflict, Store
 from orchestragent.workspace import Workspace
@@ -179,10 +184,56 @@ class Handler(BaseHTTPRequestHandler):
             raise ValueError("Unexpected fields")
 
 
+def build_routing(args: argparse.Namespace) -> tuple[ProviderRegistry, dict[str, str]]:
+    """Mock by default; two HTTP endpoints when both are configured.
+
+    Implementation and review are separate adapters by construction, so no task
+    can ever have one endpoint approve its own work.
+    """
+    routes = dict.fromkeys(STAGES, "mock")
+    if not (args.implement_endpoint and args.review_endpoint):
+        if args.implement_endpoint or args.review_endpoint:
+            raise SystemExit("Both --implement-endpoint and --review-endpoint are required")
+        return ProviderRegistry([MockAdapter()]), routes
+    registry = ProviderRegistry(
+        [
+            MockAdapter(),
+            HttpAdapter(
+                "implement",
+                HttpEndpoint(
+                    base_url=args.implement_endpoint,
+                    model=args.implement_model,
+                    api_key=os.environ.get(args.implement_key_env, "")
+                    if args.implement_key_env
+                    else "",
+                ),
+            ),
+            HttpAdapter(
+                "review",
+                HttpEndpoint(
+                    base_url=args.review_endpoint,
+                    model=args.review_model,
+                    api_key=os.environ.get(args.review_key_env, "")
+                    if args.review_key_env
+                    else "",
+                ),
+            ),
+        ]
+    )
+    routes.update({"plan": "implement", "implement": "implement", "review": "review"})
+    return registry, routes
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--data-dir", type=Path, default=Path(".data"))
+    parser.add_argument("--implement-endpoint", help="Base URL of the implementing endpoint")
+    parser.add_argument("--implement-model", default="")
+    parser.add_argument("--implement-key-env", default="", help="Env var holding the API key")
+    parser.add_argument("--review-endpoint", help="Base URL of the reviewing endpoint")
+    parser.add_argument("--review-model", default="")
+    parser.add_argument("--review-key-env", default="", help="Env var holding the API key")
     args = parser.parse_args()
     args.data_dir.mkdir(parents=True, exist_ok=True)
     with (args.data_dir / "controller.lock").open("w") as lock:
@@ -190,9 +241,12 @@ def main() -> None:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             raise SystemExit("Another controller owns this data directory") from None
+        registry, routes = build_routing(args)
         controller = Controller(
             Store(args.data_dir / "tasks.sqlite"),
             Workspace(args.data_dir / "workspaces"),
+            registry=registry,
+            routes=routes,
             lease_seconds=30,
         )
         # Bind before recovering: a second server must not invalidate active work.

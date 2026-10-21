@@ -41,7 +41,7 @@
 |---|---|---|
 | 持久状态机 | SQLite 存任务与事件，租约超时、断点恢复、陈旧写入防护 | ✅ |
 | 固定五阶段 | `plan → implement → review → test → summarize`，每阶段留证据 | ✅ |
-| 跨厂商独立审查 | 实现端与审查端必须是不同厂商，否则规划直接被拒 | ✅ |
+| 跨端点独立审查 | 实现端与审查端必须是不同端点，指向同一个会直接拒绝启动 | ✅ |
 | 隔离工作树 | 每个任务独立工作树，审查固定提交 SHA，集成前不碰你的分支 | ✅ |
 | 审批门 | 审批绑定操作摘要（digest）+ revision；revision 变了审批自动失效 | ✅ |
 | 版本化设置 | 配置有 revision 与审计记录，新任务保存不可变快照 | ✅ |
@@ -123,6 +123,24 @@ PYTHONPATH=src uv run python -m orchestragent.server
 curl -s http://127.0.0.1:8765/health
 # {"mode": "mock", "version": 2}
 ```
+
+## 接入真实端点
+
+不配端点时全程 Mock。配两个端点后，规划与实现走一个、审查走另一个——**两个都必须给，
+少一个直接拒绝启动**，所以不存在「同一个端点审自己的代码」这种配置。
+
+```sh
+export IMPL_KEY=...      # 只从环境变量读取，不进数据库、事件或日志
+export REVIEW_KEY=...
+
+PYTHONPATH=src uv run python -m orchestragent.server \
+  --implement-endpoint https://impl.example/v1 --implement-model model-a --implement-key-env IMPL_KEY \
+  --review-endpoint    https://rev.example/v1  --review-model  model-b --review-key-env REVIEW_KEY
+```
+
+端点需要提供 `POST /chat/completions`，返回体的 `choices[0].message.content` 是一段 JSON。
+这段 JSON 必须满足该阶段的结构（`schema.py` 逐字段校验），不合格就判失败，
+不会带着脏数据继续下一步。检查 `GET /providers` 可以看到注册了哪些端点。
 
 ## 使用
 

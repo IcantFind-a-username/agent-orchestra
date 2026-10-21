@@ -19,6 +19,8 @@ class StepContext:
     revision: str
     artifact: str
     approved: bool = False
+    # The stage contract an adapter must satisfy when it returns structured data.
+    schema: dict[str, object] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -34,12 +36,15 @@ class StepResult:
     provider: str = "mock"
     model: str = ""
     usage: dict[str, object] = field(default_factory=dict)
+    # Structured payload for adapters that return schema-conforming JSON.
+    data: dict[str, object] = field(default_factory=dict)
 
 
 class Adapter(Protocol):
     """A provider. The core never imports a concrete implementation."""
 
-    id: str
+    @property
+    def id(self) -> str: ...
 
     def run(self, context: StepContext) -> StepResult: ...
 

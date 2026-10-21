@@ -35,12 +35,26 @@ class Controller:
         registry: ProviderRegistry | None = None,
         clock: Callable[[], float] = time.time,
         lease_seconds: float = 30,
+        routes: dict[str, str] | None = None,
     ):
         self.store = store
         self.workspace = workspace
         self.registry = registry if registry is not None else ProviderRegistry([MockAdapter()])
         self.clock = clock
         self.lease_seconds = lease_seconds
+        # Which adapter handles each stage. Implement and review must not share one
+        # when more than one provider is registered: that is the whole point of the split.
+        self.routes = {stage: "mock" for stage in STAGES}
+        if routes:
+            self.routes.update(routes)
+        if (
+            len(self.registry.ids()) > 1
+            and self.routes["implement"] == self.routes["review"]
+        ):
+            raise ValueError("Implementation and review must use different providers")
+        for stage, provider in self.routes.items():
+            if provider not in self.registry.ids():
+                raise ValueError(f"Route for {stage} names an unregistered provider")
         self.settings = SettingsStore(store, self.registry.ids())
 
     def submit(
@@ -153,6 +167,7 @@ class Controller:
                 task.lease_until = self.clock() + self.lease_seconds
                 step = task.steps[STAGES.index(task.stage)]
                 step.status = "running"
+                step.provider = self.routes[task.stage]
                 self._record(
                     db,
                     task,
@@ -194,7 +209,10 @@ class Controller:
                 artifact=source,
                 approved=task.approved,
             )
-            result = self.registry.run(task.provider, context)
+            provider = task.steps[STAGES.index(task.stage)].provider
+            # The route is authoritative: the controller knows which adapter it called,
+            # so an adapter cannot relabel itself in the audit trail.
+            result = replace(self.registry.run(provider, context), provider=provider)
             # A stale or cancelled call cannot begin additional filesystem work.
             current = self.store.read(task.id)
             if current.run_token != task.run_token or current.status != "running":
