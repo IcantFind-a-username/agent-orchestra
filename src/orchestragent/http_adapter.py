@@ -97,6 +97,7 @@ class HttpAdapter:
                 {"role": "user", "content": context.prompt},
             ],
             "response_format": {"type": "json_object"},
+            "context": context.context_map,
         }
 
     def _post(self, body: dict[str, object]) -> tuple[int, bytes]:

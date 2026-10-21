@@ -257,6 +257,7 @@ curl -s -X POST http://127.0.0.1:8765/settings/proposals/<proposal_id>/apply
 | `--implement-command` / `--review-command` | — | `cli` 模式下的两条命令（不经 shell） |
 | `--token-env` | — | 该环境变量存在时，除 `/health` 外都要求 Bearer |
 | `--search-root` | — | 允许 `/search` 检索的目录 |
+| `--seed-repo` | — | 任务从这个既有仓库起步，而不是空工作树 |
 
 服务只允许从本机回环访问：校验 `Host` 必须为 `127.0.0.1` 或 `localhost`，
 并拒绝带 `Origin` 头的请求（防浏览器跨站调用）。**不要暴露到公网。**
@@ -315,12 +316,7 @@ curl -s -X POST http://127.0.0.1:8765/settings/proposals/<proposal_id>/apply
 | W5 | 本机 CLI 后端（命令模板，不经 shell） |
 | W6 | 前向库结构迁移、服务端 Bearer token |
 | W7 | 代码库检索 `/search`（带输出预算） |
-
-待做：
-
-| 波次 | 内容 | 目标 |
-|---|---|---|
-| W8 | 导入既有仓库（seed repo） | 让检索参与规划，而不是只看空工作树 |
+| W8 | 导入既有仓库；规划阶段先看预算内的文件与命中 |
 
 ## 参与贡献
 

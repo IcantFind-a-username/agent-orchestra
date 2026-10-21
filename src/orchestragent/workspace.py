@@ -18,8 +18,11 @@ BAD_SOURCE = "def add(a: int, b: int) -> int:\n    return a - b\n"
 
 
 class Workspace:
-    def __init__(self, root: Path):
+    def __init__(self, root: Path, seed: Path | None = None):
         self.root = root.resolve()
+        self.seed = seed.resolve() if seed is not None else None
+        if self.seed is not None and not self.seed.is_dir():
+            raise ValueError("Seed repository must be a directory")
         self.root.mkdir(parents=True, exist_ok=True)
 
     @staticmethod
@@ -87,15 +90,40 @@ class Workspace:
             self.git(repo, "rev-parse", "--verify", "HEAD")
         except subprocess.CalledProcessError:
             # A prior process may have died after writing/staging but before committing.
-            (repo / "README.md").write_text("Isolated task workspace.\n")
-            self.git(repo, "add", "README.md")
-            self.git(repo, "commit", "-m", "Seed Mock workspace")
+            self._seed(repo)
+            self.git(repo, "add", "-A")
+            self.git(repo, "commit", "-m", "Seed task workspace")
         implementation = repo / "implementation"
         if not implementation.exists():
             self.git(
                 repo, "worktree", "add", "-B", "mock/implementation", str(implementation), "main"
             )
         return repo, implementation
+
+    SEED_MAX_BYTES = 512_000
+    SEED_MAX_FILES = 2000
+    SEED_SKIP = frozenset({".git", "node_modules", "__pycache__", ".venv", ".mypy_cache"})
+
+    def _seed(self, repo: Path) -> None:
+        """Copy an existing tree, or write the neutral placeholder for a bare task."""
+        if self.seed is None:
+            (repo / "README.md").write_text("Isolated task workspace.\n")
+            return
+        copied = 0
+        for path in sorted(self.seed.rglob("*")):
+            relative = path.relative_to(self.seed)
+            if any(part in self.SEED_SKIP for part in relative.parts):
+                continue
+            if not path.is_file() or path.is_symlink():
+                continue
+            if path.stat().st_size > self.SEED_MAX_BYTES:
+                continue
+            copied += 1
+            if copied > self.SEED_MAX_FILES:
+                raise ValueError("Seed repository exceeds the file limit")
+            target = repo / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(path.read_bytes())
 
     def review_source(self, task_id: str, revision: str) -> str:
         repo = self.repo(task_id)

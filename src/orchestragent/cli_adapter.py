@@ -37,6 +37,7 @@ class CliAdapter:
             "schema": context.schema,
             "revision": context.revision,
             "attempt": context.attempt,
+            "context": context.context_map,
         }
         try:
             completed = subprocess.run(

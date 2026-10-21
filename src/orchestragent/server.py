@@ -273,6 +273,11 @@ def main() -> None:
     parser.add_argument("--data-dir", type=Path, default=Path(".data"))
     parser.add_argument("--search-root", type=Path, help="Directory exposed to /search")
     parser.add_argument(
+        "--seed-repo",
+        type=Path,
+        help="Existing repository a task starts from, instead of an empty workspace",
+    )
+    parser.add_argument(
         "--token-env",
         default="",
         help="Env var holding a bearer token; required when the port is not private",
@@ -306,7 +311,7 @@ def main() -> None:
         registry, routes = build_routing(args)
         controller = Controller(
             Store(args.data_dir / "tasks.sqlite"),
-            Workspace(args.data_dir / "workspaces"),
+            Workspace(args.data_dir / "workspaces", args.seed_repo),
             registry=registry,
             routes=routes,
             lease_seconds=30,

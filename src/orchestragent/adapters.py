@@ -21,6 +21,8 @@ class StepContext:
     approved: bool = False
     # The stage contract an adapter must satisfy when it returns structured data.
     schema: dict[str, object] = field(default_factory=dict)
+    # Budgeted repository view; populated for the planning stage of a seeded task.
+    context_map: dict[str, object] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

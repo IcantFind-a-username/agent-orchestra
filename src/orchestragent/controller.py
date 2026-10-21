@@ -6,6 +6,7 @@ import time
 import uuid
 from collections.abc import Callable
 from dataclasses import replace
+from typing import cast
 
 from orchestragent.adapters import MockAdapter, StepContext, StepResult
 from orchestragent.contracts import STAGE_SCHEMAS
@@ -21,6 +22,7 @@ from orchestragent.models import (
 )
 from orchestragent.registry import ProviderRegistry
 from orchestragent.sandbox import Sandbox, detect
+from orchestragent.search import plan_context
 from orchestragent.serialization import dumps
 from orchestragent.settings import SettingsStore
 from orchestragent.store import Conflict, Store
@@ -208,6 +210,9 @@ class Controller:
                 )
             else:
                 source = ""
+            context_map: dict[str, object] = {}
+            if task.stage == "plan" and self.workspace.seed is not None:
+                context_map = cast(dict[str, object], plan_context(self.workspace.seed, task.prompt))
             context = StepContext(
                 task_id=task.id,
                 prompt=task.prompt,
@@ -219,6 +224,7 @@ class Controller:
                 artifact=source,
                 approved=task.approved,
                 schema=STAGE_SCHEMAS[task.stage],
+                context_map=context_map,
             )
             provider = task.steps[STAGES.index(task.stage)].provider
             # The route is authoritative: the controller knows which adapter it called,
