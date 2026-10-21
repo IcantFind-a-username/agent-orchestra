@@ -15,6 +15,10 @@ classifiers = [
     "Topic :: Software Development :: Code Generators",
 ]
 
+[project.urls]
+Homepage = "https://github.com/IcantFind-a-username/agent-orchestra"
+Issues = "https://github.com/IcantFind-a-username/agent-orchestra/issues"
+
 [dependency-groups]
 dev = ["pytest>=8,<10", "ruff>=0.11,<1", "mypy>=1.15,<2"]
 
