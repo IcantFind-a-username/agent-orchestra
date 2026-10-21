@@ -232,7 +232,8 @@ curl -s -X POST http://127.0.0.1:8765/settings/proposals/<proposal_id>/apply
 | 方法 | 路径 | 用途 |
 |---|---|---|
 | GET | `/health` | 模式与版本 |
-| GET | `/providers` | 各厂商就绪状态 |
+| GET | `/providers` | 已注册的端点 |
+| GET | `/search?q=&limit=` | 在 `--search-root` 内检索（带输出预算） |
 | GET | `/settings` | 读取配置 |
 | POST | `/settings` | 更新配置（需 `base_revision`） |
 | POST | `/settings/proposals` | 自然语言生成配置草案 |
@@ -252,6 +253,10 @@ curl -s -X POST http://127.0.0.1:8765/settings/proposals/<proposal_id>/apply
 |---|---|---|
 | `--port` | `8765` | 监听端口 |
 | `--data-dir` | `.data` | 数据库与工作树位置 |
+| `--transport` | `http` | `http` 用端点，`cli` 调用本机命令 |
+| `--implement-command` / `--review-command` | — | `cli` 模式下的两条命令（不经 shell） |
+| `--token-env` | — | 该环境变量存在时，除 `/health` 外都要求 Bearer |
+| `--search-root` | — | 允许 `/search` 检索的目录 |
 
 服务只允许从本机回环访问：校验 `Host` 必须为 `127.0.0.1` 或 `localhost`，
 并拒绝带 `Origin` 头的请求（防浏览器跨站调用）。**不要暴露到公网。**
@@ -307,14 +312,15 @@ curl -s -X POST http://127.0.0.1:8765/settings/proposals/<proposal_id>/apply
 | W2 | HTTP 适配器、结构化 `data` 与 JSON Schema 校验 |
 | W3 | 按阶段路由，实现端与审查端强制分离 |
 | W4 | 沙箱执行：macOS `sandbox-exec` / Linux `bwrap` |
+| W5 | 本机 CLI 后端（命令模板，不经 shell） |
+| W6 | 前向库结构迁移、服务端 Bearer token |
+| W7 | 代码库检索 `/search`（带输出预算） |
 
 待做：
 
 | 波次 | 内容 | 目标 |
 |---|---|---|
-| W5 | 本机 CLI 后端 | 用一条命令模板接入任意本地工具 |
-| W6 | 库结构迁移、服务端 token | 可安全升级 |
-| W7 | 代码库搜索 | 规划阶段按 token 预算检索 |
+| W8 | 导入既有仓库（seed repo） | 让检索参与规划，而不是只看空工作树 |
 
 ## 参与贡献
 

@@ -273,3 +273,20 @@ class Adapter(Protocol):
 - 沙箱只有 macOS 后端
 - 没有代码库检索，规划阶段依赖模型对项目的猜测
 - 成本对按量计费端点有效；端点不返回用量时只能记为「未知」
+
+## 14. 运行时能力
+
+**迁移。** `Store` 以 `PRAGMA user_version` 记录进度，`MIGRATIONS` 每项升一级，只前向不降级；
+打开一个比本构建更新的库会直接报错，而不是在未知结构上继续写。
+
+**认证。** 配置了 token 时，除 `/health` 外所有请求都要带 `Authorization: Bearer`，
+比较用 `hmac.compare_digest`。没有 token 时的信任边界仍然只是回环地址，
+这是单用户假设，不是多租户方案。
+
+**本机命令。** `cli` 传输把请求以 JSON 写到子进程 stdin，读 stdout 的单个 JSON 对象，
+不经 shell、不读也不复制它的凭据。退出码非零只报告状态码，不回显 stderr——那里可能有令牌。
+
+**检索。** `/search` 在 `--search-root` 内做正则匹配，跳过 VCS 与构建目录，
+按字节预算截断并显式标记 `truncated`。它现在是独立能力：任务工作树默认是空的，
+把检索接进规划需要先支持导入既有仓库。
+

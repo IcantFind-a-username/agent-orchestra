@@ -2,30 +2,49 @@
 
 import argparse
 import fcntl
+import hmac
 import json
 import os
+import shlex
 import threading
 from dataclasses import asdict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
-from orchestragent.adapters import MockAdapter
+from orchestragent.adapters import Adapter, MockAdapter
+from orchestragent.cli_adapter import CliAdapter, CliEndpoint
 from orchestragent.controller import Controller
 from orchestragent.http_adapter import HttpAdapter, HttpEndpoint
 from orchestragent.models import STAGES
 from orchestragent.registry import ProviderRegistry
+from orchestragent.search import search as search_repo
 from orchestragent.serialization import dumps
 from orchestragent.store import Conflict, Store
 from orchestragent.workspace import Workspace
 
 
+def authorized(header: str | None, token: str) -> bool:
+    """No token configured means loopback trust; otherwise require an exact bearer."""
+    if not token:
+        return True
+    return hmac.compare_digest(header or "", f"Bearer {token}")
+
+
 class Server(ThreadingHTTPServer):
     daemon_threads = True
 
-    def __init__(self, controller: Controller, port: int = 8765):
+    def __init__(
+        self,
+        controller: Controller,
+        port: int = 8765,
+        token: str = "",
+        search_root: Path | None = None,
+    ):
         self.controller = controller
         self.mode = "mock"
+        self.token = token
+        self.search_root = search_root
         super().__init__(("127.0.0.1", port), Handler)
 
     def service_actions(self) -> None:
@@ -71,6 +90,11 @@ class Handler(BaseHTTPRequestHandler):
         try:
             path = urlsplit(self.path)
             parts = path.path.strip("/").split("/")
+            if parts != ["health"] and not authorized(
+                self.headers.get("Authorization"), self.server.token
+            ):
+                self.reply(401, {"error": "Missing or invalid token"})
+                return
             body: dict[str, object] = {}
             if method == "POST":
                 if self.headers.get("Transfer-Encoding"):
@@ -87,6 +111,14 @@ class Handler(BaseHTTPRequestHandler):
             controller = self.server.controller
             if method == "GET" and parts == ["health"]:
                 self.reply(200, {"mode": self.server.mode, "version": 2})
+            elif method == "GET" and parts == ["search"]:
+                root = self.server.search_root
+                if root is None:
+                    raise ValueError("Search is not configured; start with --search-root")
+                params = parse_qs(path.query)
+                query = (params.get("q") or [""])[0]
+                limit = int((params.get("limit") or ["50"])[0])
+                self.reply(200, search_repo(root, query, limit=limit))
             elif method == "GET" and parts == ["providers"]:
                 self.reply(200, controller.registry.status())
             elif parts == ["settings"]:
@@ -185,18 +217,30 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def build_routing(args: argparse.Namespace) -> tuple[ProviderRegistry, dict[str, str]]:
-    """Mock by default; two HTTP endpoints when both are configured.
+    """Mock by default; two transports when both sides are configured.
 
     Implementation and review are separate adapters by construction, so no task
     can ever have one endpoint approve its own work.
     """
     routes = dict.fromkeys(STAGES, "mock")
-    if not (args.implement_endpoint and args.review_endpoint):
-        if args.implement_endpoint or args.review_endpoint:
-            raise SystemExit("Both --implement-endpoint and --review-endpoint are required")
-        return ProviderRegistry([MockAdapter()]), routes
-    registry = ProviderRegistry(
-        [
+    if args.transport == "cli":
+        commands = (args.implement_command, args.review_command)
+        if not all(commands):
+            if any(commands):
+                raise SystemExit("Both --implement-command and --review-command are required")
+            return ProviderRegistry([MockAdapter()]), routes
+        adapters: list[Adapter] = [
+            MockAdapter(),
+            CliAdapter("implement", CliEndpoint(tuple(shlex.split(args.implement_command)))),
+            CliAdapter("review", CliEndpoint(tuple(shlex.split(args.review_command)))),
+        ]
+    else:
+        endpoints = (args.implement_endpoint, args.review_endpoint)
+        if not all(endpoints):
+            if any(endpoints):
+                raise SystemExit("Both --implement-endpoint and --review-endpoint are required")
+            return ProviderRegistry([MockAdapter()]), routes
+        adapters = [
             MockAdapter(),
             HttpAdapter(
                 "implement",
@@ -219,15 +263,28 @@ def build_routing(args: argparse.Namespace) -> tuple[ProviderRegistry, dict[str,
                 ),
             ),
         ]
-    )
     routes.update({"plan": "implement", "implement": "implement", "review": "review"})
-    return registry, routes
+    return ProviderRegistry(adapters), routes
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--data-dir", type=Path, default=Path(".data"))
+    parser.add_argument("--search-root", type=Path, help="Directory exposed to /search")
+    parser.add_argument(
+        "--token-env",
+        default="",
+        help="Env var holding a bearer token; required when the port is not private",
+    )
+    parser.add_argument(
+        "--transport",
+        choices=("http", "cli"),
+        default="http",
+        help="How the two sides are reached: an HTTP endpoint or a local command",
+    )
+    parser.add_argument("--implement-command", help="Command that implements (no shell)")
+    parser.add_argument("--review-command", help="Command that reviews (no shell)")
     parser.add_argument("--implement-endpoint", help="Base URL of the implementing endpoint")
     parser.add_argument("--implement-model", default="")
     parser.add_argument("--implement-key-env", default="", help="Env var holding the API key")
@@ -256,7 +313,8 @@ def main() -> None:
             allow_bundled_tests=args.allow_unsandboxed_tests,
         )
         # Bind before recovering: a second server must not invalidate active work.
-        server = Server(controller, args.port)
+        token = os.environ.get(args.token_env, "") if args.token_env else ""
+        server = Server(controller, args.port, token, args.search_root)
         controller.recover()
         stopped = threading.Event()
 

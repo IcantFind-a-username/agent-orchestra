@@ -1,4 +1,8 @@
-"""SQLite transactions keep task state and its audit event inseparable."""
+"""SQLite transactions keep task state and its audit event inseparable.
+
+Schema versions are forward-only: each entry in `MIGRATIONS` upgrades exactly one
+version, and `PRAGMA user_version` records how far the file has been brought.
+"""
 
 from __future__ import annotations
 
@@ -12,6 +16,24 @@ from pathlib import Path
 from orchestragent.models import Approval, Artifact, Event, Step, Task
 from orchestragent.serialization import dumps
 
+MIGRATIONS: tuple[str, ...] = (
+    """
+    CREATE TABLE IF NOT EXISTS tasks (
+        id TEXT PRIMARY KEY, request_id TEXT UNIQUE NOT NULL,
+        status TEXT NOT NULL, created_at REAL NOT NULL, body TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS events (
+        seq INTEGER PRIMARY KEY AUTOINCREMENT,
+        task_id TEXT NOT NULL REFERENCES tasks(id),
+        kind TEXT NOT NULL, at REAL NOT NULL, data TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS events_task ON events(task_id, seq);
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS events_kind ON events(kind, seq);
+    """,
+)
+
 
 class Conflict(ValueError):
     pass
@@ -21,25 +43,30 @@ class Store:
     def __init__(self, path: Path):
         self.path = path
         path.parent.mkdir(parents=True, exist_ok=True)
+        # journal_mode cannot be changed inside a transaction.
+        connection = sqlite3.connect(path, isolation_level=None)
+        try:
+            connection.execute("PRAGMA journal_mode=WAL")
+        finally:
+            connection.close()
         with self.transaction() as db:
-            # Initialize once. Re-running this on every open would silently reset a
-            # future migration back to version 1.
-            if db.execute("PRAGMA user_version").fetchone()[0] != 0:
-                return
-            db.executescript("""
-                PRAGMA journal_mode=WAL;
-                CREATE TABLE IF NOT EXISTS tasks (
-                    id TEXT PRIMARY KEY, request_id TEXT UNIQUE NOT NULL,
-                    status TEXT NOT NULL, created_at REAL NOT NULL, body TEXT NOT NULL
-                );
-                CREATE TABLE IF NOT EXISTS events (
-                    seq INTEGER PRIMARY KEY AUTOINCREMENT,
-                    task_id TEXT NOT NULL REFERENCES tasks(id),
-                    kind TEXT NOT NULL, at REAL NOT NULL, data TEXT NOT NULL
-                );
-                CREATE INDEX IF NOT EXISTS events_task ON events(task_id, seq);
-                PRAGMA user_version=1;
-            """)
+            self.migrate(db)
+
+    @staticmethod
+    def version(db: sqlite3.Connection) -> int:
+        return int(db.execute("PRAGMA user_version").fetchone()[0])
+
+    def migrate(self, db: sqlite3.Connection) -> int:
+        """Apply every newer migration exactly once; never downgrade."""
+        current = self.version(db)
+        if current > len(MIGRATIONS):
+            raise RuntimeError(
+                f"Database is at version {current}, newer than this build supports"
+            )
+        for target in range(current + 1, len(MIGRATIONS) + 1):
+            # executescript commits on its own, so the version bump travels with it.
+            db.executescript(MIGRATIONS[target - 1] + f"\nPRAGMA user_version={target};")
+        return self.version(db)
 
     @contextmanager
     def transaction(self) -> Iterator[sqlite3.Connection]:
