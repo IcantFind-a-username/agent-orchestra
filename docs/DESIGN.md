@@ -134,12 +134,14 @@ class StepContext:
     revision: str
     artifact: str
     approved: bool = False
+    schema: dict[str, object] = ...  # 该阶段必须满足的结构（schema.py 校验）
 
 @dataclass(frozen=True)
 class StepResult:
     outcome: str = "ok"              # ok / failed / rate_limited / ...
     summary: str = ""
-    artifact: str = ""
+    artifact: str = ""               # Mock 的单文件捷径
+    data: dict[str, object] = ...    # 结构化结果；有 files 时写工作树
     session_id: str = ""
     retry_after: float = 0.0
     cost_usd: float | None = 0.0     # None = 未知，不是 0
@@ -148,7 +150,8 @@ class StepResult:
     usage: dict[str, object] = field(default_factory=dict)
 
 class Adapter(Protocol):
-    id: str
+    @property
+    def id(self) -> str: ...
     def run(self, context: StepContext) -> StepResult: ...
 ```
 

@@ -19,6 +19,7 @@ from orchestragent.models import (
     Task,
 )
 from orchestragent.registry import ProviderRegistry
+from orchestragent.sandbox import Sandbox, detect
 from orchestragent.serialization import dumps
 from orchestragent.settings import SettingsStore
 from orchestragent.store import Conflict, Store
@@ -36,6 +37,7 @@ class Controller:
         clock: Callable[[], float] = time.time,
         lease_seconds: float = 30,
         allow_bundled_tests: bool = False,
+        sandbox: Sandbox | None = None,
         routes: dict[str, str] | None = None,
     ):
         self.store = store
@@ -44,6 +46,7 @@ class Controller:
         self.clock = clock
         self.lease_seconds = lease_seconds
         self.allow_bundled_tests = allow_bundled_tests
+        self.sandbox: Sandbox = sandbox if sandbox is not None else detect()
         # Which adapter handles each stage. Implement and review must not share one
         # when more than one provider is registered: that is the whole point of the split.
         self.routes = {stage: "mock" for stage in STAGES}
@@ -244,14 +247,15 @@ class Controller:
                     ]
             elif result.outcome == "ok" and task.stage == "test":
                 if bundled:
-                    if not self.allow_bundled_tests:
-                        # Running model-authored tests needs an OS sandbox this repo lacks.
-                        result = replace(
-                            result,
-                            outcome="policy_blocked",
-                            summary="No sandbox backend: refusing to execute model-authored tests",
+                    if self.sandbox.available():
+                        passed, report = self.workspace.integrate_bundle_and_test(
+                            task.id, revision, self.sandbox
                         )
-                    else:
+                        result = replace(
+                            result, outcome="ok" if passed else "failed", summary=report
+                        )
+                        artifacts = [Artifact("integration-tests.txt", report)]
+                    elif self.allow_bundled_tests:
                         passed, report = self.workspace.integrate_bundle_and_test(
                             task.id, revision
                         )
@@ -259,6 +263,13 @@ class Controller:
                             result, outcome="ok" if passed else "failed", summary=report
                         )
                         artifacts = [Artifact("integration-tests.txt", report)]
+                    else:
+                        # Running model-authored tests unconfined is not a default we accept.
+                        result = replace(
+                            result,
+                            outcome="policy_blocked",
+                            summary="No sandbox backend: refusing to execute model-authored tests",
+                        )
                 else:
                     passed, report = self.workspace.integrate_and_test(task.id, revision)
                     result = replace(result, outcome="ok" if passed else "failed", summary=report)

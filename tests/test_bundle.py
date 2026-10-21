@@ -5,6 +5,7 @@ import pytest
 from orchestragent.adapters import MockAdapter, StepContext, StepResult
 from orchestragent.controller import Controller
 from orchestragent.registry import ProviderRegistry
+from orchestragent.sandbox import NoSandbox, Sandbox, detect
 from orchestragent.store import Store
 from orchestragent.workspace import Workspace
 
@@ -34,13 +35,14 @@ class BundleAdapter(MockAdapter):
         return StepResult(summary=f"{context.stage} ok", provider="bundle")
 
 
-def build(tmp_path: Path, allow: bool = False) -> Controller:
+def build(tmp_path: Path, allow: bool = False, sandbox: Sandbox | None = None) -> Controller:
     return Controller(
         Store(tmp_path / "tasks.sqlite"),
         Workspace(tmp_path / "workspaces"),
         registry=ProviderRegistry([BundleAdapter()]),
         routes={stage: "bundle" for stage in ("plan", "implement", "review", "test", "summarize")},
         allow_bundled_tests=allow,
+        sandbox=sandbox or NoSandbox(),
     )
 
 
@@ -93,4 +95,23 @@ def test_the_opt_in_runs_the_bundled_tests(tmp_path: Path) -> None:
     report = next(
         item.content for item in finished.artifacts if item.name == "integration-tests.txt"
     )
+    assert "PASS" in report
+    assert "UNSANDBOXED" in report
+
+
+SANDBOX = detect()
+
+
+@pytest.mark.skipif(not SANDBOX.available(), reason="no sandbox backend on this platform")
+def test_a_real_sandbox_runs_the_bundled_tests(tmp_path: Path) -> None:
+    controller = build(tmp_path, sandbox=SANDBOX)
+    task, _ = controller.submit("b3", "add two numbers")
+    while controller.tick():
+        pass
+    finished = controller.store.read(task.id)
+    assert finished.status == "completed"
+    report = next(
+        item.content for item in finished.artifacts if item.name == "integration-tests.txt"
+    )
+    assert SANDBOX.name in report
     assert "PASS" in report

@@ -10,6 +10,9 @@ import subprocess
 import sys
 from pathlib import Path, PurePosixPath
 
+from orchestragent.sandbox import Sandbox, python_argv
+from orchestragent.sandbox import run as run_sandbox
+
 GOOD_SOURCE = "def add(a: int, b: int) -> int:\n    return a + b\n"
 BAD_SOURCE = "def add(a: int, b: int) -> int:\n    return a - b\n"
 
@@ -191,21 +194,32 @@ class Workspace:
         ]
         return json.dumps(files, ensure_ascii=False, sort_keys=True)
 
-    def integrate_bundle_and_test(self, task_id: str, revision: str) -> tuple[bool, str]:
-        """Merge and run the project's own tests. Only reachable with explicit opt-in."""
+    def integrate_bundle_and_test(
+        self, task_id: str, revision: str, sandbox: Sandbox | None = None
+    ) -> tuple[bool, str]:
+        """Merge, then run the project's tests inside `sandbox` when one is given.
+
+        `sandbox=None` runs unconfined and must only be reached by an explicit opt-in.
+        """
         repo = self.repo(task_id)
         self.git(repo, "merge", "--ff-only", revision)
         if self.git(repo, "rev-parse", "HEAD") != revision:
             raise ValueError("Integrated revision differs from reviewed revision")
-        result = subprocess.run(
-            [sys.executable, "-I", "-S", "-m", "unittest", "discover", "-q"],
-            cwd=repo,
-            env={"PATH": os.defpath, "HOME": str(repo)},
-            capture_output=True,
-            text=True,
-            timeout=120,
-            check=False,
-        )
-        passed = result.returncode == 0
-        output = (result.stderr or result.stdout).strip()
-        return passed, f"Bundled tests: {'PASS' if passed else 'FAIL'}\n{output[-2000:]}"
+        argv = python_argv()
+        if sandbox is None:
+            completed = subprocess.run(
+                argv,
+                cwd=repo,
+                env={"PATH": os.defpath, "HOME": str(repo)},
+                capture_output=True,
+                text=True,
+                timeout=120,
+                check=False,
+            )
+            passed = completed.returncode == 0
+            output = (completed.stderr or completed.stdout).strip()
+            label = "UNSANDBOXED"
+        else:
+            passed, output = run_sandbox(sandbox, argv, repo, timeout=120)
+            label = sandbox.name
+        return passed, f"Bundled tests ({label}): {'PASS' if passed else 'FAIL'}\n{output[-2000:]}"

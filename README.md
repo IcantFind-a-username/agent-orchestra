@@ -52,7 +52,7 @@
 | 可插拔适配器 | 适配器注册表；本仓库只带 Mock 实现 | 🚧 真实适配器待接入 |
 | iPhone 控制台 | 原生 SwiftUI：提交、历史、审批、折叠详情 | ✅ iOS 17+ |
 | 代码库搜索 | ripgrep + 符号索引，按 token 预算裁剪结果 | 🚧 计划中 |
-| Linux 沙箱 | `bwrap` / `landlock` 后端 | 🚧 计划中 |
+| 沙箱执行 | 模型写的测试在禁网、写入受限的沙箱里跑 | ✅ macOS / Linux |
 | 库结构迁移 | SQLite `user_version` 前向迁移 | 🚧 计划中 |
 
 > **当前阶段**：内核已可运行，但只带 Mock 适配器——端到端流程能跑通，不会调用任何厂商。
@@ -143,9 +143,9 @@ PYTHONPATH=src uv run python -m orchestragent.server \
 不会带着脏数据继续下一步。检查 `GET /providers` 可以看到注册了哪些端点。
 
 实现阶段返回的 `files` 会被逐个校验后写进隔离工作树：必须是相对路径、不能含 `..`、
-不能是隐藏文件、扩展名在白名单内、总量有上限。测试阶段默认**拒绝**执行模型写的测试，
-因为本仓库没有可用的沙箱后端；要跑必须显式加 `--allow-unsandboxed-tests`，
-并接受随之而来的风险。
+不能是隐藏文件、扩展名在白名单内、总量有上限。有沙箱后端时（macOS `sandbox-exec`、
+Linux `bwrap`），模型写的测试在禁网、写入限定在工作树内的环境里执行；没有可用后端时
+默认**拒绝执行**，只有显式加 `--allow-unsandboxed-tests` 才会裸跑，风险自负。
 
 ## 使用
 
@@ -304,16 +304,17 @@ curl -s -X POST http://127.0.0.1:8765/settings/proposals/<proposal_id>/apply
 |---|---|
 | W0 | 仓库骨架、许可、文档 |
 | W1 | 内核去厂商化：适配器注册表，核心中不出现任何厂商名 |
+| W2 | HTTP 适配器、结构化 `data` 与 JSON Schema 校验 |
+| W3 | 按阶段路由，实现端与审查端强制分离 |
+| W4 | 沙箱执行：macOS `sandbox-exec` / Linux `bwrap` |
 
 待做：
 
 | 波次 | 内容 | 目标 |
 |---|---|---|
-| W2 | `Adapter` 协议改为数据导向（`data` + JSON Schema） | 新厂商接入无需适配私有形状 |
-| W3 | CLI 与 HTTP 两种后端实现 | 端到端串起多个端点 |
-| W4 | 库结构迁移、服务端 token | 可安全升级 |
-| W5 | Linux 沙箱后端 | 跨平台 |
-| W6 | 代码库搜索 | 规划阶段按 token 预算检索 |
+| W5 | 本机 CLI 后端 | 用一条命令模板接入任意本地工具 |
+| W6 | 库结构迁移、服务端 token | 可安全升级 |
+| W7 | 代码库搜索 | 规划阶段按 token 预算检索 |
 
 ## 参与贡献
 
